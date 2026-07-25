@@ -165,10 +165,9 @@ plugin.waitForTask = async function (task) {
 	if (taskUid === undefined) {
 		throw new Error('Meilisearch did not return a task UID');
 	}
-	const result = await plugin.client.waitForTask(taskUid, {
-		timeOutMs: 300000,
-		intervalMs: 50,
-	});
+	const result = plugin.client.tasks?.waitForTask ?
+		await plugin.client.tasks.waitForTask(taskUid, { timeout: 300000, interval: 50 }) :
+		await plugin.client.waitForTask(taskUid, { timeOutMs: 300000, intervalMs: 50 });
 	if (result.status !== 'succeeded') {
 		throw new Error(`Meilisearch task ${taskUid} ${result.status}: ${result.error?.message || 'unknown error'}`);
 	}
