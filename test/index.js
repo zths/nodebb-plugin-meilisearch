@@ -55,8 +55,8 @@ describe('nodebb-plugin-meilisearch', () => {
 		({ postData, topicData } = await topics.post({
 			uid: authorUid,
 			cid: cid,
-			title: 'Test Meilisearch Topic Title',
-			content: 'The content of test topic first post',
+			title: 'Test Meilisearch Topic Title 中文搜索',
+			content: 'The content of test topic first post，中文全文搜索 NodeBB 4.14',
 		}));
 
 		responseData = await topics.reply({
@@ -80,9 +80,17 @@ describe('nodebb-plugin-meilisearch', () => {
 	it('should find the initial topic by partial title', async () => {
 		const results = await search({
 			searchIn: 'titles',
-			qeury: 'Test Mei',
+			query: 'Test Mei',
 		});
 		assert(Array.isArray(results.posts), 'Search result is not an array');
+		assert.strictEqual(results.posts.filter(post => post.pid === postData.pid).length, 1, 'Post id not in results');
+	});
+
+	it('should find a Chinese title', async () => {
+		const results = await search({
+			searchIn: 'titles',
+			query: '中文搜索',
+		});
 		assert.strictEqual(results.posts.filter(post => post.pid === postData.pid).length, 1, 'Post id not in results');
 	});
 
@@ -109,6 +117,14 @@ describe('nodebb-plugin-meilisearch', () => {
 			query: 'The con',
 		});
 		assert(Array.isArray(results.posts), 'Search result is not an array');
+		assert.strictEqual(results.posts.filter(post => post.pid === postData.pid).length, 1, 'Post id not in results');
+	});
+
+	it('should find mixed Chinese and English content', async () => {
+		const results = await search({
+			searchIn: 'posts',
+			query: '全文搜索 NodeBB',
+		});
 		assert.strictEqual(results.posts.filter(post => post.pid === postData.pid).length, 1, 'Post id not in results');
 	});
 

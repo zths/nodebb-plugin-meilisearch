@@ -159,6 +159,36 @@ plugin.checkHealth = async function () {
 	}
 };
 
+plugin.waitForTask = async function (task) {
+	const taskUid = task?.taskUid ?? task?.uid;
+	if (taskUid === undefined) {
+		throw new Error('Meilisearch did not return a task UID');
+	}
+	const result = await plugin.client.waitForTask(taskUid, {
+		timeOutMs: 300000,
+		intervalMs: 50,
+	});
+	if (result.status !== 'succeeded') {
+		throw new Error(`Meilisearch task ${taskUid} ${result.status}: ${result.error?.message || 'unknown error'}`);
+	}
+	return result;
+};
+
+plugin.runTask = async function (taskPromise) {
+	return await plugin.waitForTask(await taskPromise);
+};
+
+plugin.ensureIndex = async function (uid, primaryKey) {
+	try {
+		await plugin.client.getIndex(uid);
+	} catch (err) {
+		if (err.code !== 'index_not_found') {
+			throw err;
+		}
+		await plugin.runTask(plugin.client.createIndex(uid, { primaryKey }));
+	}
+};
+
 plugin.getNotices = async function (notices) {
 	const checkHealth = await plugin.checkHealth();
 	notices.push({
@@ -170,8 +200,8 @@ plugin.getNotices = async function (notices) {
 };
 
 plugin.updateIndexSettings = async (data) => {
-	await plugin.client.createIndex('post', { primaryKey: 'pid' });
-	await plugin.client.createIndex('topic', { primaryKey: 'tid' });
+	await plugin.ensureIndex('post', 'pid');
+	await plugin.ensureIndex('topic', 'tid');
 	data = {
 		maxDocuments: parseInt(data?.maxDocuments || await settings.getOne(plugin.id, 'maxDocuments') || 500, 10),
 		rankingRules: (data?.rankingRules || await settings.getOne(plugin.id, 'rankingRules'))?.map(value => value.rule),
@@ -198,7 +228,7 @@ plugin.updateIndexSettings = async (data) => {
 			) => [word, synonyms?.split(',').map(synonym => synonym.trim())]),
 		),
 	};
-	await plugin.client.index('post').updateSettings({
+	await plugin.runTask(plugin.client.index('post').updateSettings({
 		filterableAttributes: ['tid', 'cid', 'uid', 'timestamp'],
 		sortableAttributes: ['timestamp', 'cid'],
 		searchableAttributes: ['content'],
@@ -216,8 +246,8 @@ plugin.updateIndexSettings = async (data) => {
 			disableOnWords: data.typoToleranceDisableOnWords,
 		},
 		synonyms: data.synonyms,
-	});
-	await plugin.client.index('topic').updateSettings({
+	}));
+	await plugin.runTask(plugin.client.index('topic').updateSettings({
 		filterableAttributes: ['cid', 'uid', 'timestamp'],
 		sortableAttributes: ['cid', 'title', 'timestamp'],
 		searchableAttributes: ['title'],
@@ -235,13 +265,13 @@ plugin.updateIndexSettings = async (data) => {
 			disableOnWords: data.typoToleranceDisableOnWords,
 		},
 		synonyms: data.synonyms,
-	});
+	}));
 };
 
 plugin.reindex = async function (force = false) {
 	if (plugin.indexing.running) {
 		winston.warn('[plugins/meilisearch] Already indexing');
-		return;
+		return false;
 	}
 	plugin.indexing = {
 		running: true,
@@ -256,12 +286,15 @@ plugin.reindex = async function (force = false) {
 	};
 	pubsub.publish('meilisearch:reindex', plugin.indexing);
 	winston.info(`[plugin/meilisearch] Indexing posts and topics${force ? ' (forced)' : ''}`);
+	let succeeded = false;
 	try {
 		if (force) {
-			await plugin.client.index('post').deleteAllDocuments();
-			await plugin.client.index('topic').deleteAllDocuments();
+			await Promise.all([
+				plugin.runTask(plugin.client.index('post').deleteAllDocuments()),
+				plugin.runTask(plugin.client.index('topic').deleteAllDocuments()),
+			]);
 		}
-		Promise.all([
+		await Promise.all([
 			batch.processSortedSet(
 				'topics:tid',
 				async (tids) => {
@@ -269,7 +302,7 @@ plugin.reindex = async function (force = false) {
 					Sockets.server.to('admin/plugins/meilisearch').emit('plugins.meilisearch.reindex', plugin.indexing);
 					pubsub.publish('meilisearch:reindex', plugin.indexing);
 					const topics = await Topics.getTopicsFields(tids, ['tid', 'cid', 'uid', 'mainPid', 'title', 'timestamp']);
-					await plugin.client.index('topic').updateDocuments(
+					await plugin.runTask(plugin.client.index('topic').updateDocuments(
 						topics.map(topic => ({
 							tid: topic.tid,
 							cid: topic.cid,
@@ -279,7 +312,7 @@ plugin.reindex = async function (force = false) {
 							timestamp: topic.timestamp,
 						})),
 						{ primaryKey: 'tid' },
-					);
+					));
 				},
 				{
 					batch: parseInt(await settings.getOne(plugin.id, 'maxDocuments') || 500, 10),
@@ -294,7 +327,7 @@ plugin.reindex = async function (force = false) {
 					pubsub.publish('meilisearch:reindex', plugin.indexing);
 					const posts = await Posts.getPostsFields(pids, ['pid', 'tid', 'uid', 'content', 'timestamp']);
 					const cids = await Posts.getCidsByPids(pids);
-					await plugin.client.index('post').updateDocuments(
+					await plugin.runTask(plugin.client.index('post').updateDocuments(
 						posts.map((post, index) => ({
 							pid: post.pid,
 							tid: post.tid,
@@ -304,29 +337,19 @@ plugin.reindex = async function (force = false) {
 							timestamp: post.timestamp,
 						})),
 						{ primaryKey: 'pid' },
-					);
+					));
 				},
 				{
 					batch: parseInt(await settings.getOne(plugin.id, 'maxDocuments') || 500, 10),
 					progress: plugin.indexing.post_progress,
 				},
 			),
-		]).then(() => {
-			plugin.indexing = {
-				running: false,
-				topic_progress: {
-					total: null,
-					current: null,
-				},
-				post_progress: {
-					total: null,
-					current: null,
-				},
-			};
-			winston.info('[plugin/meilisearch] Indexing complete');
-		});
+		]);
+		succeeded = true;
+		winston.info('[plugin/meilisearch] Indexing complete');
 	} catch (err) {
 		winston.error(`[plugin/meilisearch] Indexing failed: ${err.message}`);
+	} finally {
 		plugin.indexing = {
 			running: false,
 			topic_progress: {
@@ -338,43 +361,108 @@ plugin.reindex = async function (force = false) {
 				current: null,
 			},
 		};
+		await settings.set(plugin.id, { indexed: succeeded }, true);
 	}
-	await settings.set(plugin.id, { indexed: true }, true);
+	return succeeded;
+};
+
+plugin.withHealthyClient = async function (operation, callback) {
+	try {
+		if (!plugin.healthy && !await plugin.checkHealth()) {
+			winston.warn(`[plugin/meilisearch] Skipping ${operation}: Meilisearch is unavailable`);
+			return false;
+		}
+		await callback();
+		return true;
+	} catch (err) {
+		plugin.healthy = false;
+		winston.error(`[plugin/meilisearch] ${operation} failed: ${err.message}`);
+		return false;
+	}
 };
 
 plugin.indexPost = async function ({ post }) {
-	if (!post.cid) {
-		post.cid = await Posts.getCidByPid(post.pid);
+	return await plugin.indexPosts({ posts: [post] });
+};
+
+plugin.indexPosts = async function ({ posts }) {
+	const pids = (posts || []).map(post => post.pid).filter(Boolean);
+	if (!pids.length) {
+		return false;
 	}
-	await plugin.client.index('post').updateDocuments([
-		{
-			pid: post.pid,
-			tid: post.tid,
-			cid: post.cid,
-			uid: post.uid,
-			content: post.content,
-			timestamp: post.timestamp,
-		},
-	], { primaryKey: 'pid' });
+	return await plugin.withHealthyClient('index posts', async () => {
+		const [postData, cids] = await Promise.all([
+			Posts.getPostsFields(pids, ['pid', 'tid', 'uid', 'content', 'timestamp']),
+			Posts.getCidsByPids(pids),
+		]);
+		await plugin.runTask(plugin.client.index('post').updateDocuments(
+			postData.map((post, index) => ({
+				pid: post.pid,
+				tid: post.tid,
+				cid: cids[index],
+				uid: post.uid,
+				content: post.content,
+				timestamp: post.timestamp,
+			})),
+			{ primaryKey: 'pid' },
+		));
+	});
 };
 
 plugin.deindexPost = async function ({ post }) {
-	await plugin.client.index('post').deleteDocument(post.pid);
+	return await plugin.deindexPosts({ posts: [post] });
+};
+
+plugin.deindexPosts = async function ({ posts }) {
+	const pids = (posts || []).map(post => post.pid).filter(Boolean);
+	if (!pids.length) {
+		return false;
+	}
+	return await plugin.withHealthyClient('deindex posts', async () => {
+		await plugin.runTask(plugin.client.index('post').deleteDocuments(pids));
+	});
 };
 
 plugin.indexTopic = async function ({ topic }) {
-	await plugin.client.index('topic').updateDocuments([{
-		tid: topic.tid,
-		cid: topic.cid,
-		uid: topic.uid,
-		mainPid: topic.mainPid,
-		title: topic.title,
-		timestamp: topic.timestamp,
-	}], { primaryKey: 'tid' });
+	return await plugin.indexTopics({ topics: [topic] });
+};
+
+plugin.indexTopics = async function ({ topics }) {
+	const tids = (topics || []).map(topic => topic.tid).filter(Boolean);
+	if (!tids.length) {
+		return false;
+	}
+	return await plugin.withHealthyClient('index topics', async () => {
+		const topicData = await Topics.getTopicsFields(
+			tids,
+			['tid', 'cid', 'uid', 'mainPid', 'title', 'timestamp'],
+		);
+		await plugin.runTask(plugin.client.index('topic').updateDocuments(
+			topicData.map(topic => ({
+				tid: topic.tid,
+				cid: topic.cid,
+				uid: topic.uid,
+				mainPid: topic.mainPid,
+				title: topic.title,
+				timestamp: topic.timestamp,
+			})),
+			{ primaryKey: 'tid' },
+		));
+	});
 };
 
 plugin.deindexTopic = async function ({ topic }) {
-	await plugin.client.index('topic').deleteDocument(topic.tid);
+	return await plugin.deindexTopics({ topics: [topic] });
+};
+
+plugin.deindexTopics = async function ({ topics }) {
+	const tids = (topics || []).map(topic => topic.tid).filter(Boolean);
+	if (!tids.length) {
+		return false;
+	}
+	return await plugin.withHealthyClient('deindex topics', async () => {
+		await plugin.runTask(plugin.client.index('topic').deleteDocuments(tids));
+	});
 };
 
 plugin.checkConflict = function () {
@@ -388,7 +476,7 @@ plugin.checkConflict = function () {
 		'nodebb-plugin-dbsearch',
 		'nodebb-plugin-solr',
 		'nodebb-plugin-elasticsearch',
-		'ndoebb-plugin-search-elasticsearch',
+		'nodebb-plugin-search-elasticsearch',
 	];
 	for (const hook of hooksToCheck) {
 		if (plugins.loadedHooks[hook].filter(hookData => conflictingPlugins.includes(hookData.id)).length >= 1) {
@@ -422,20 +510,25 @@ plugin.search = async function (data) {
 	const searchData = data?.searchData;
 	const index = Array.isArray(data?.index) ? data.index[0] : data.index;
 	const id = `${index?.length ? index[0] : 'p'}id`;
-	const result = await plugin.client.index(data.index).search(data.content, {
-		attributesToRetrieve: [id],
-		limit: parseInt(await settings.getOne(plugin.id, 'maxDocuments') || 500, 10),
-		filter: plugin.buildFilter(
-			data.cid,
-			data.uid,
-			searchData?.timeFilter,
-			searchData?.timeRange,
-			searchData?.tid,
-		),
-		sort: plugin.buildSort(searchData?.sortBy, searchData?.sortDirection),
-		matchingStrategy: data.matchWords === 'all' ? 'all' : 'last',
-	});
-	data.ids = result.hits.map(hit => hit[id]);
+	try {
+		const result = await plugin.client.index(index).search(data.content, {
+			attributesToRetrieve: [id],
+			limit: parseInt(await settings.getOne(plugin.id, 'maxDocuments') || 500, 10),
+			filter: plugin.buildFilter(
+				data.cid,
+				data.uid,
+				searchData?.timeFilter,
+				searchData?.timeRange,
+				searchData?.tid,
+			),
+			sort: plugin.buildSort(searchData?.sortBy, searchData?.sortDirection),
+			matchingStrategy: data.matchWords === 'all' ? 'all' : 'last',
+		});
+		data.ids = result.hits.map(hit => hit[id]);
+	} catch (err) {
+		plugin.healthy = false;
+		winston.error(`[plugin/meilisearch] Search failed: ${err.message}`);
+	}
 	return data;
 };
 
@@ -478,9 +571,8 @@ plugin.saveSettings = async (data) => {
 	if (data.plugin === plugin.id && !data.quiet && plugin.initialized) {
 		try {
 			await plugin.prepareSearch(data.settings);
-			if (
-				Object.entries(data.settings).some(isBreaking)
-			) {
+			const breakingSettings = await Promise.all(Object.entries(data.settings).map(isBreaking));
+			if (breakingSettings.some(Boolean)) {
 				winston.info(`settings changed, updating index`);
 				await plugin.updateIndexSettings(data.settings);
 			}
@@ -498,6 +590,7 @@ async function isBreaking([setting, value]) {
 
 function deepCompare(a, b) {
 	if (typeof a !== typeof b) return false;
+	if (a === null || b === null) return a === b;
 	switch (typeof a) {
 		case 'object':
 			return Object.keys(a).length === Object.keys(b).length &&

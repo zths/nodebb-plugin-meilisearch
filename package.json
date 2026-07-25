@@ -1,6 +1,6 @@
 {
 	"name": "nodebb-plugin-meilisearch",
-	"version": "0.7.6",
+	"version": "0.8.0",
 	"description": "A plugin for integrating MeiliSearch with NodeBB",
 	"main": "library.js",
 	"scripts": {
@@ -9,7 +9,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/oplik0/nodebb-plugin-meilisearch"
+		"url": "https://github.com/zths/nodebb-plugin-meilisearch"
 	},
 	"keywords": [
 		"nodebb",
@@ -35,25 +35,23 @@
 	},
 	"license": "MIT",
 	"bugs": {
-		"url": "https://github.com/oplik0/nodebb-plugin-meilisearch/issues"
+		"url": "https://github.com/zths/nodebb-plugin-meilisearch/issues"
 	},
 	"readmeFilename": "README.md",
 	"nbbpm": {
-		"compatibility": "^1.18.0 || ^2.0.0 || ^3.0.0"
+		"compatibility": "^1.18.0 || ^2.0.0 || ^3.0.0 || ^4.0.0"
 	},
 	"devDependencies": {
 		"@commitlint/cli": "19.8.0",
 		"@commitlint/config-angular": "19.8.0",
-		"@eslint/eslintrc": "^3.2.0",
-		"@eslint/js": "^9.15.0",
+		"@eslint/js": "^10.0.1",
 		"dprint": "^0.49.0",
-		"eslint": "9.24.0",
-		"eslint-config-nodebb": "0.2.1",
-		"eslint-plugin-import": "2.31.0",
+		"eslint": "10.2.1",
+		"eslint-config-nodebb": "^2.0.0",
 		"husky": "9.1.7",
 		"lint-staged": "15.5.1"
 	},
 	"dependencies": {
-		"meilisearch": "^0.51.0"
+		"meilisearch": "^0.60.0"
 	}
 }
