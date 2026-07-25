@@ -183,7 +183,7 @@ plugin.ensureIndex = async function (uid, primaryKey) {
 	try {
 		await plugin.client.getIndex(uid);
 	} catch (err) {
-		if (err.code !== 'index_not_found') {
+		if ((err.code || err.cause?.code) !== 'index_not_found') {
 			throw err;
 		}
 		await plugin.runTask(plugin.client.createIndex(uid, { primaryKey }));
