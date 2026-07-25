@@ -53,7 +53,7 @@
 		},
 		{
 			"hook": "action:topic.restore",
-			"method": "indexTopic"
+			"method": "syncTopic"
 		},
 		{
 			"hook": "action:topic.edit",
@@ -61,7 +61,7 @@
 		},
 		{
 			"hook": "action:topic.move",
-			"method": "indexTopic"
+			"method": "syncTopic"
 		},
 		{
 			"hook": "action:topic.delete",

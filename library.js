@@ -301,9 +301,12 @@ plugin.reindex = async function (force = false) {
 					plugin.indexing.topic_progress.current += tids.length;
 					Sockets.server.to('admin/plugins/meilisearch').emit('plugins.meilisearch.reindex', plugin.indexing);
 					pubsub.publish('meilisearch:reindex', plugin.indexing);
-					const topics = await Topics.getTopicsFields(tids, ['tid', 'cid', 'uid', 'mainPid', 'title', 'timestamp']);
+					const topics = await Topics.getTopicsFields(
+						tids,
+						['tid', 'cid', 'uid', 'mainPid', 'title', 'timestamp', 'deleted'],
+					);
 					await plugin.runTask(plugin.client.index('topic').updateDocuments(
-						topics.map(topic => ({
+						topics.filter(topic => topic && !topic.deleted).map(topic => ({
 							tid: topic.tid,
 							cid: topic.cid,
 							uid: topic.uid,
@@ -325,17 +328,23 @@ plugin.reindex = async function (force = false) {
 					plugin.indexing.post_progress.current += pids.length;
 					Sockets.server.to('admin/plugins/meilisearch').emit('plugins.meilisearch.reindex', plugin.indexing);
 					pubsub.publish('meilisearch:reindex', plugin.indexing);
-					const posts = await Posts.getPostsFields(pids, ['pid', 'tid', 'uid', 'content', 'timestamp']);
-					const cids = await Posts.getCidsByPids(pids);
+					const posts = await Posts.getPostsFields(pids, ['pid', 'tid', 'uid', 'content', 'timestamp', 'deleted']);
+					const [cids, relatedTopics] = await Promise.all([
+						Posts.getCidsByPids(pids),
+						Topics.getTopicsFields([...new Set(posts.map(post => post.tid))], ['tid', 'deleted']),
+					]);
+					const activeTids = new Set(relatedTopics.filter(topic => topic && !topic.deleted).map(topic => topic.tid));
 					await plugin.runTask(plugin.client.index('post').updateDocuments(
-						posts.map((post, index) => ({
+						posts.map((post, index) => ({ post, cid: cids[index] }))
+							.filter(({ post }) => post && !post.deleted && activeTids.has(post.tid))
+							.map(({ post, cid }) => ({
 							pid: post.pid,
 							tid: post.tid,
-							cid: cids[index],
+							cid,
 							uid: post.uid,
 							content: post.content,
 							timestamp: post.timestamp,
-						})),
+							})),
 						{ primaryKey: 'pid' },
 					));
 				},
@@ -427,6 +436,15 @@ plugin.indexTopic = async function ({ topic }) {
 	return await plugin.indexTopics({ topics: [topic] });
 };
 
+plugin.syncTopic = async function ({ topic }) {
+	const pids = await Posts.getPidsFromSet(`tid:${topic.tid}:posts`, 0, -1);
+	const [topicResult, postsResult] = await Promise.all([
+		plugin.indexTopic({ topic }),
+		plugin.indexPosts({ posts: pids.map(pid => ({ pid })) }),
+	]);
+	return topicResult && postsResult;
+};
+
 plugin.indexTopics = async function ({ topics }) {
 	const tids = (topics || []).map(topic => topic.tid).filter(Boolean);
 	if (!tids.length) {
@@ -452,7 +470,12 @@ plugin.indexTopics = async function ({ topics }) {
 };
 
 plugin.deindexTopic = async function ({ topic }) {
-	return await plugin.deindexTopics({ topics: [topic] });
+	const pids = await Posts.getPidsFromSet(`tid:${topic.tid}:posts`, 0, -1);
+	const [topicResult, postsResult] = await Promise.all([
+		plugin.deindexTopics({ topics: [topic] }),
+		plugin.deindexPosts({ posts: pids.map(pid => ({ pid })) }),
+	]);
+	return topicResult && postsResult;
 };
 
 plugin.deindexTopics = async function ({ topics }) {
