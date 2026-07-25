@@ -1,7 +1,8 @@
 'use strict';
 
 const winston = require.main.require('winston');
-const { MeiliSearch } = require('meilisearch');
+const meilisearch = require('meilisearch');
+const Meilisearch = meilisearch.Meilisearch || meilisearch.MeiliSearch;
 
 const routeHelpers = require.main.require('./src/routes/helpers');
 const settings = require.main.require('./src/meta/settings');
@@ -30,7 +31,7 @@ plugin.indexing = {
 	},
 };
 
-/** @type MeiliSearch */
+/** @type Meilisearch */
 plugin.client = undefined;
 plugin.defaults = {
 	host: 'http://localhost:7700',
@@ -96,7 +97,7 @@ plugin.init = async function (params) {
 
 plugin.prepareSearch = async function (data) {
 	winston.debug(`[plugin/meilisearch] Connecting to MeiliSearch host: ${await settings.getOne(plugin.id, 'host')}`);
-	plugin.client = new MeiliSearch({
+	plugin.client = new Meilisearch({
 		host: data?.host || await settings.getOne(plugin.id, 'host'),
 		apiKey: data?.apiKey || await settings.getOne(plugin.id, 'apiKey') || undefined,
 	});
