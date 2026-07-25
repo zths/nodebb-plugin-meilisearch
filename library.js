@@ -338,12 +338,12 @@ plugin.reindex = async function (force = false) {
 						posts.map((post, index) => ({ post, cid: cids[index] }))
 							.filter(({ post }) => post && !post.deleted && activeTids.has(post.tid))
 							.map(({ post, cid }) => ({
-							pid: post.pid,
-							tid: post.tid,
-							cid,
-							uid: post.uid,
-							content: post.content,
-							timestamp: post.timestamp,
+								pid: post.pid,
+								tid: post.tid,
+								cid,
+								uid: post.uid,
+								content: post.content,
+								timestamp: post.timestamp,
 							})),
 						{ primaryKey: 'pid' },
 					));
