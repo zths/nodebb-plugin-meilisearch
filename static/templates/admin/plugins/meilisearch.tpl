@@ -15,6 +15,27 @@
 					<span class="mdl-switch__label"><strong>[[meilisearch:admin.forceReindex]]</strong></span>
 				</label>
 			</div>
+			<div class="col-sm-12 col-xs-12">
+				<h4>[[meilisearch:admin.lastIndexRun]]</h4>
+				<dl class="dl-horizontal">
+					<dt>[[meilisearch:admin.lastIndexStatus]]</dt>
+					<dd id="last-index-status">{lastIndexRun.status}</dd>
+					<dt>[[meilisearch:admin.lastIndexStartedAt]]</dt>
+					<dd id="last-index-started-at">{lastIndexRun.startedAt}</dd>
+					<dt>[[meilisearch:admin.lastIndexFinishedAt]]</dt>
+					<dd id="last-index-finished-at">{lastIndexRun.finishedAt}</dd>
+					<dt>[[meilisearch:admin.lastIndexDuration]]</dt>
+					<dd><span id="last-index-duration">{lastIndexRun.durationSeconds}</span> [[meilisearch:admin.seconds]]</dd>
+					<dt>[[meilisearch:admin.lastIndexMode]]</dt>
+					<dd id="last-index-mode">{lastIndexRun.mode}</dd>
+					<dt>[[meilisearch:admin.lastIndexPostCount]]</dt>
+					<dd id="last-index-post-count">{lastIndexRun.postCount}</dd>
+					<dt>[[meilisearch:admin.lastIndexTopicCount]]</dt>
+					<dd id="last-index-topic-count">{lastIndexRun.topicCount}</dd>
+					<dt>[[meilisearch:admin.lastIndexError]]</dt>
+					<dd id="last-index-error">{lastIndexRun.error}</dd>
+				</dl>
+			</div>
 			<div class="col-sm-12 col-xs-12 reindex-progress-container {{{ if !indexing.running}}}hidden{{{end}}}">
 				<h4 class="text-center">[[meilisearch:admin.reindexTopicsProgress]] <span id="topic-reindex-progress-text">{indexing.topic_progress.current}/{indexing.topic_progress.total}</span></h4>
 				<div class="progress">

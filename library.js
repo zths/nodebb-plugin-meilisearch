@@ -86,11 +86,13 @@ plugin.init = async function (params) {
 	routeHelpers.setupAdminPageRoute(router, '/admin/plugins/meilisearch', [], (req, res) => {
 		res.render('admin/plugins/meilisearch', {
 			indexing: plugin.indexing,
+			lastIndexRun: plugin.formatLastIndexRun(plugin.indexing.lastRun),
 			topicPercent: Math.round(100 * plugin.indexing.topic_progress.current / plugin.indexing.topic_progress.total),
 			postPercent: Math.round(100 * plugin.indexing.post_progress.current / plugin.indexing.post_progress.total),
 		});
 	});
 	await settings.setOnEmpty(plugin.id, plugin.defaults);
+	plugin.indexing.lastRun = await plugin.getLastIndexRun();
 	await plugin.prepareSearch();
 	plugin.initialized = true;
 };
@@ -189,6 +191,52 @@ plugin.ensureIndex = async function (uid, primaryKey) {
 	}
 };
 
+plugin.getLastIndexRun = async function () {
+	const value = await settings.getOne(plugin.id, 'lastIndexRun');
+	if (!value) {
+		return null;
+	}
+	try {
+		return JSON.parse(value);
+	} catch (err) {
+		winston.warn(`[plugin/meilisearch] Invalid last index result: ${err.message}`);
+		return null;
+	}
+};
+
+plugin.formatLastIndexRun = function (lastRun) {
+	return {
+		status: lastRun?.status || 'never',
+		startedAt: lastRun?.startedAt || '—',
+		finishedAt: lastRun?.finishedAt || '—',
+		durationSeconds: Number.isFinite(lastRun?.durationMs) ? (lastRun.durationMs / 1000).toFixed(2) : '—',
+		postCount: Number.isFinite(lastRun?.postCount) ? lastRun.postCount : '—',
+		topicCount: Number.isFinite(lastRun?.topicCount) ? lastRun.topicCount : '—',
+		mode: lastRun?.force ? 'force' : 'normal',
+		error: lastRun?.error || '—',
+	};
+};
+
+plugin.getIndexDocumentCounts = async function () {
+	try {
+		const stats = await plugin.client.getStats();
+		return {
+			postCount: stats.indexes?.post?.numberOfDocuments ?? null,
+			topicCount: stats.indexes?.topic?.numberOfDocuments ?? null,
+		};
+	} catch (err) {
+		winston.warn(`[plugin/meilisearch] Unable to read index stats: ${err.message}`);
+		return {
+			postCount: null,
+			topicCount: null,
+		};
+	}
+};
+
+plugin.broadcastIndexing = function () {
+	pubsub.publish('meilisearch:indexing', plugin.indexing);
+};
+
 plugin.getNotices = async function (notices) {
 	const checkHealth = await plugin.checkHealth();
 	notices.push({
@@ -273,6 +321,17 @@ plugin.reindex = async function (force = false) {
 		winston.warn('[plugins/meilisearch] Already indexing');
 		return false;
 	}
+	const startedAt = new Date();
+	const runningResult = {
+		status: 'running',
+		startedAt: startedAt.toISOString(),
+		finishedAt: null,
+		durationMs: null,
+		force,
+		postCount: null,
+		topicCount: null,
+		error: null,
+	};
 	plugin.indexing = {
 		running: true,
 		topic_progress: {
@@ -283,10 +342,13 @@ plugin.reindex = async function (force = false) {
 			current: 0,
 			total: 0,
 		},
+		lastRun: runningResult,
 	};
-	pubsub.publish('meilisearch:reindex', plugin.indexing);
+	await settings.set(plugin.id, { lastIndexRun: JSON.stringify(runningResult) }, true);
+	plugin.broadcastIndexing();
 	winston.info(`[plugin/meilisearch] Indexing posts and topics${force ? ' (forced)' : ''}`);
 	let succeeded = false;
+	let failure = null;
 	try {
 		if (force) {
 			await Promise.all([
@@ -299,8 +361,7 @@ plugin.reindex = async function (force = false) {
 				'topics:tid',
 				async (tids) => {
 					plugin.indexing.topic_progress.current += tids.length;
-					Sockets.server.to('admin/plugins/meilisearch').emit('plugins.meilisearch.reindex', plugin.indexing);
-					pubsub.publish('meilisearch:reindex', plugin.indexing);
+					plugin.broadcastIndexing();
 					const topics = await Topics.getTopicsFields(
 						tids,
 						['tid', 'cid', 'uid', 'mainPid', 'title', 'timestamp', 'deleted'],
@@ -326,8 +387,7 @@ plugin.reindex = async function (force = false) {
 				'posts:pid',
 				async (pids) => {
 					plugin.indexing.post_progress.current += pids.length;
-					Sockets.server.to('admin/plugins/meilisearch').emit('plugins.meilisearch.reindex', plugin.indexing);
-					pubsub.publish('meilisearch:reindex', plugin.indexing);
+					plugin.broadcastIndexing();
 					const posts = await Posts.getPostsFields(pids, ['pid', 'tid', 'uid', 'content', 'timestamp', 'deleted']);
 					const [cids, relatedTopics] = await Promise.all([
 						Posts.getCidsByPids(pids),
@@ -357,8 +417,23 @@ plugin.reindex = async function (force = false) {
 		succeeded = true;
 		winston.info('[plugin/meilisearch] Indexing complete');
 	} catch (err) {
+		failure = err;
 		winston.error(`[plugin/meilisearch] Indexing failed: ${err.message}`);
 	} finally {
+		const finishedAt = new Date();
+		const counts = succeeded ?
+			await plugin.getIndexDocumentCounts() :
+			{ postCount: null, topicCount: null };
+		const lastRun = {
+			status: succeeded ? 'success' : 'failed',
+			startedAt: startedAt.toISOString(),
+			finishedAt: finishedAt.toISOString(),
+			durationMs: finishedAt.getTime() - startedAt.getTime(),
+			force,
+			postCount: counts.postCount,
+			topicCount: counts.topicCount,
+			error: failure?.message || null,
+		};
 		plugin.indexing = {
 			running: false,
 			topic_progress: {
@@ -369,8 +444,13 @@ plugin.reindex = async function (force = false) {
 				total: null,
 				current: null,
 			},
+			lastRun,
 		};
-		await settings.set(plugin.id, { indexed: succeeded }, true);
+		await settings.set(plugin.id, {
+			indexed: succeeded,
+			lastIndexRun: JSON.stringify(lastRun),
+		}, true);
+		plugin.broadcastIndexing();
 	}
 	return succeeded;
 };

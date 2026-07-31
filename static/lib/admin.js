@@ -21,14 +21,21 @@ define('admin/plugins/meilisearch', [
 		$('#reindex').on('click', reindex);
 		const progressBarContainers = document.querySelectorAll('.reindex-progress-container');
 		socket.on('plugins.meilisearch.reindex', (data) => {
+			if (data?.lastRun) {
+				renderLastIndexRun(data.lastRun);
+			}
 			if (data && (data.running || data.topic_progress.total > 0 || data.post_progress.total > 0)) {
 				progressBarContainers.forEach((container) => {
 					container.classList.remove('hidden');
 				});
 				const topicProgressBar = document.getElementById('topic-reindex-progress');
-				setProgress(topicProgressBar, data.topic_progress.current, data.topic_progress.total);
+				if (data.topic_progress.total > 0) {
+					setProgress(topicProgressBar, data.topic_progress.current, data.topic_progress.total);
+				}
 				const postProgressBar = document.getElementById('post-reindex-progress');
-				setProgress(postProgressBar, data.post_progress.current, data.post_progress.total);
+				if (data.post_progress.total > 0) {
+					setProgress(postProgressBar, data.post_progress.current, data.post_progress.total);
+				}
 
 				document.getElementById('topic-reindex-progress-text').innerText =
 					`${data.topic_progress.current}/${data.topic_progress.total}`;
@@ -39,10 +46,7 @@ define('admin/plugins/meilisearch', [
 					container.classList.add('hidden');
 				});
 			}
-			if (
-				data.topic_progress.total === data.topic_progress.current &&
-				data.post_progress.total === data.post_progress.current
-			) {
+			if (!data.running && data.lastRun?.status === 'success') {
 				alerts.alert({
 					title: 'Reindexing Completed',
 					message: 'Reindexing completed successfully',
@@ -57,6 +61,23 @@ define('admin/plugins/meilisearch', [
 			}
 		});
 	};
+
+	function renderLastIndexRun(lastRun) {
+		const setText = (id, value) => {
+			document.getElementById(id).innerText = value ?? '—';
+		};
+		setText('last-index-status', lastRun.status);
+		setText('last-index-started-at', lastRun.startedAt);
+		setText('last-index-finished-at', lastRun.finishedAt);
+		setText(
+			'last-index-duration',
+			Number.isFinite(lastRun.durationMs) ? (lastRun.durationMs / 1000).toFixed(2) : '—',
+		);
+		setText('last-index-mode', lastRun.force ? 'force' : 'normal');
+		setText('last-index-post-count', lastRun.postCount);
+		setText('last-index-topic-count', lastRun.topicCount);
+		setText('last-index-error', lastRun.error || '—');
+	}
 
 	function setProgress(element, current, total) {
 		element.innerText = `${current}/${total}`;
