@@ -37,7 +37,7 @@
 		},
 		{
 			"hook": "action:post.delete",
-			"method": "deindexPost"
+			"method": "indexPost"
 		},
 		{
 			"hook": "action:posts.purge",
@@ -65,7 +65,7 @@
 		},
 		{
 			"hook": "action:topic.delete",
-			"method": "deindexTopic"
+			"method": "syncTopic"
 		},
 		{
 			"hook": "action:topics.purge",

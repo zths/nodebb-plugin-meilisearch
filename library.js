@@ -367,7 +367,7 @@ plugin.reindex = async function (force = false) {
 						['tid', 'cid', 'uid', 'mainPid', 'title', 'timestamp', 'deleted'],
 					);
 					await plugin.runTask(plugin.client.index('topic').updateDocuments(
-						topics.filter(topic => topic && !topic.deleted).map(topic => ({
+						topics.filter(Boolean).map(topic => ({
 							tid: topic.tid,
 							cid: topic.cid,
 							uid: topic.uid,
@@ -389,14 +389,10 @@ plugin.reindex = async function (force = false) {
 					plugin.indexing.post_progress.current += pids.length;
 					plugin.broadcastIndexing();
 					const posts = await Posts.getPostsFields(pids, ['pid', 'tid', 'uid', 'content', 'timestamp', 'deleted']);
-					const [cids, relatedTopics] = await Promise.all([
-						Posts.getCidsByPids(pids),
-						Topics.getTopicsFields([...new Set(posts.map(post => post.tid))], ['tid', 'deleted']),
-					]);
-					const activeTids = new Set(relatedTopics.filter(topic => topic && !topic.deleted).map(topic => topic.tid));
+					const cids = await Posts.getCidsByPids(pids);
 					await plugin.runTask(plugin.client.index('post').updateDocuments(
 						posts.map((post, index) => ({ post, cid: cids[index] }))
-							.filter(({ post }) => post && !post.deleted && activeTids.has(post.tid))
+							.filter(({ post }) => post)
 							.map(({ post, cid }) => ({
 								pid: post.pid,
 								tid: post.tid,
